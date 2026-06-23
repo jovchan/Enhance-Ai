@@ -1,0 +1,86 @@
+{
+  "entities": {
+    "article": {
+      "title": "Article",
+      "description": "Represents a written blog article created by a user with optional AI insights and formatting status.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the article."
+        },
+        "title": {
+          "type": "string",
+          "description": "Title of the blog post."
+        },
+        "content": {
+          "type": "string",
+          "description": "Main rich-text markdown or HTML content of the article."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Id of the user who owns the article."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "published"],
+          "description": "Drafting status of the article."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last modified timestamp."
+        },
+        "wordCount": {
+          "type": "integer",
+          "description": "Total word count of the article."
+        },
+        "readabilityScore": {
+          "type": "integer",
+          "description": "AI calculated readability score out of 100."
+        }
+      },
+      "required": ["id", "title", "content", "userId", "status", "createdAt", "updatedAt"]
+    },
+    "userProfile": {
+      "title": "User Profile",
+      "description": "The public or private metadata of a registered user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "The user's unique identifier."
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address of the user."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "The custom display name."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation time of the profile."
+        }
+      },
+      "required": ["uid", "email"]
+    }
+  },
+  "firestore": {
+    "/articles/{articleId}": {
+      "schema": "article",
+      "description": "Collection storing blog articles written and saved by users."
+    },
+    "/users/{userId}": {
+      "schema": "userProfile",
+      "description": "User profiles containing account metadata."
+    }
+  }
+}
