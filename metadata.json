@@ -1,5 +1,5 @@
 {
-  "name": "Enhance AI",
+  "name": "Enhanced-AI",
   "description": "A minimalistic, bright, clean blog publishing platform featuring an AI-assisted rich editor with inline sentence autocomplete, structured dashboard, and intuitive note-taking.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

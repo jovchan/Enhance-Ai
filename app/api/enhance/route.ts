@@ -17,8 +17,12 @@ export async function POST(req: NextRequest) {
     // ignore parse error
   }
 
-  if (!text || text.trim() === "") {
-    return NextResponse.json({ result: "Please provide some text to enhance." });
+  if ((!text || text.trim() === "") && (!title || title.trim() === "")) {
+    return NextResponse.json({ result: "Please provide either some text or an article title to enhance." });
+  }
+
+  if (action === "improve-tone" && (!text || text.trim() === "")) {
+    return NextResponse.json({ result: "Please provide some draft text to clarify tone and grammar." });
   }
 
   // Pre-defined local generation helper for fast recovery or offline modes
@@ -66,9 +70,11 @@ export async function POST(req: NextRequest) {
     const ai = new GoogleGenAI({ apiKey: apiKey });
     let prompt = "";
 
+    const subjectContext = text && text.trim() ? `Draft Content:\n"""\n${text}\n"""` : `Article Title: "${title}"`;
+
     if (action === "improve-tone") {
       prompt = `
-You are professional copyeditor. Tuner tone to make the content tone: "${tone || "Professional"}".
+You are a professional copyeditor for Enhanced-AI. Tune the content tone to be: "${tone || "Professional"}".
 Analyze readability, spacing, and rhythm to maintain clean Minimalist styling. Keep the content length matching the original source.
 Return only the rewritten text.
 
@@ -78,19 +84,15 @@ ${text}
 """`;
     } else if (action === "headlines") {
       prompt = `
-You are a blogging strategist for "Enhance AI". Based on the following article content or draft idea, generate 5 click-worthy, modern, elegant, and punchy headlines that will draw massive organic read-throughs. Do NOT make them clickbait, make them highly refined and polished.
+You are a blogging strategist for "Enhanced-AI". Based on the following article content or draft idea, generate 5 click-worthy, modern, elegant, and punchy headlines that will draw massive organic read-throughs. Do NOT make them clickbait, make them highly refined and polished.
 Return only the numbered list of titles.
 
-Draft Content:
-"""
-${text}
-"""`;
+${subjectContext}`;
     } else if (action === "outline") {
       prompt = `
-Generate a structured blog outline containing an Introduction, 3 Core arguments/sections, Actionable advice, and Conclusion templates based on the user's idea or text block below:
-"""
-${text}
-"""`;
+You are a blog architect for "Enhanced-AI". Generate a structured blog outline containing an Introduction, 3 Core arguments/sections, Actionable advice, and Conclusion templates based on the subject below:
+
+${subjectContext}`;
     } else {
       return NextResponse.json({ error: "Invalid action type." }, { status: 400 });
     }
@@ -102,7 +104,10 @@ ${text}
           role: "user",
           parts: [{ text: prompt }]
         }
-      ]
+      ],
+      config: {
+        thinkingConfig: { thinkingBudget: 0 }
+      }
     });
 
     return NextResponse.json({ result: response.text?.trim() || "" });

@@ -35,12 +35,23 @@ import {
   ThumbsUp,
   Award,
   Zap,
-  Info
+  Info,
+  Copy,
+  Download,
+  Check
 } from "lucide-react";
+import {
+  registerUser,
+  authenticateUser,
+  getActiveSession,
+  clearActiveSession,
+  type UserAccount
+} from "@/lib/auth";
 
 // Types
 interface Article {
   id: string;
+  userId: string;
   title: string;
   content: string;
   status: "draft" | "published";
@@ -102,6 +113,8 @@ export default function EnhanceAISaaS() {
   const [isAIProcessing, setIsAIProcessing] = useState(false);
   const [aiOutputResult, setAiOutputResult] = useState("");
   const [selectedActionText, setSelectedActionText] = useState("");
+  const [copiedToClipboard, setCopiedToClipboard] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
 
   // UI Notification Toast
   const [toast, setToast] = useState<{ message: string; type: "success" | "info" | "warning" } | null>(null);
@@ -110,62 +123,55 @@ export default function EnhanceAISaaS() {
   const textEditorRef = useRef<HTMLTextAreaElement>(null);
   const autocompleteTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Sandbox preview states (Hero section)
+  const [sandboxTitle, setSandboxTitle] = useState("Growing an Organic Following");
+  const [sandboxContent, setSandboxContent] = useState("");
+  const [sandboxSuggestion, setSandboxSuggestion] = useState("");
+  const [isSandboxSuggesting, setIsSandboxSuggesting] = useState(false);
+  const [isSandboxEnhancing, setIsSandboxEnhancing] = useState(false);
+  const [sandboxAiOutput, setSandboxAiOutput] = useState("");
+  const sandboxTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const sandboxTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Helper to read and write all articles in localStorage (across users)
+  const getAllStoredArticles = (): Article[] => {
+    try {
+      const raw = localStorage.getItem("enhance_ai_articles");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const saveAllStoredArticles = (allArticles: Article[]) => {
+    localStorage.setItem("enhance_ai_articles", JSON.stringify(allArticles));
+  };
+
   // Initialize and Sync LocalStorage
   useEffect(() => {
-    const initTimer = setTimeout(() => {
-      // Load local auth
-      const storedUser = localStorage.getItem("enhance_ai_user");
-      if (storedUser) {
-        const user = JSON.parse(storedUser);
-        setCurrentUser(user);
-        setCurrentView("DASHBOARD");
-      }
+    const active = getActiveSession();
+    if (active) {
+      const sessionUser: UserSession = {
+        uid: active.uid,
+        email: active.email,
+        displayName: active.displayName
+      };
+      setCurrentUser(sessionUser);
+      setCurrentView("DASHBOARD");
 
-      // Load initial articles database / seed templates
-      const storedArticles = localStorage.getItem("enhance_ai_articles");
-      if (storedArticles) {
-        setArticles(JSON.parse(storedArticles));
-      } else {
-        const defaultArticles: Article[] = [
-          {
-            id: "seed-1",
-            title: "The Architecture of Clean Writing and Thinking",
-            content: "Writing is not just a tool for sharing information; it is the ultimate engine for structured thinking. In this era of rapid mental noise, maintaining a workspace that is minimal, bright, and distraction-free allows deep concepts to flourish. \n\nGrammarly and Evernote taught us that layout counts—but real-time suggestion speeds up creation twofold. When you type 'how to' or 'in this', a gentle gray suggestion should pull your thoughts forward gracefully without interrupting your creative flow. Focus is the only leverage that copywriters have left.",
-            status: "published",
-            createdAt: new Date(Date.now() - 3600000 * 24 * 3).toISOString(), // 3 days ago
-            updatedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-            tags: ["minimalism", "writing", "focus"],
-            wordCount: 112,
-            readabilityScore: 84,
-            isBookmarked: true,
-            category: "Creative Writing"
-          },
-          {
-            id: "seed-2",
-            title: "How to Build an Organic Tech Newsletter from Scratch",
-            content: "The key to building a sustainable audience is not flashy marketing campaigns. The absolute secret lies in consistency and depth. Many creators struggle with starting because staring at a blank canvas induces rapid anxiety.\n\nBy leveraging predictive sentence completion engines, we bypass the cold-start problem. Overcoming writer's block is as simple as letting AI clear the path to your next paragraph. You write the thesis, and Enhance AI helps you finish standard transition sentences with a single finger tap.",
-            status: "draft",
-            createdAt: new Date(Date.now() - 3600000 * 12).toISOString(), // 12 hours ago
-            updatedAt: new Date(Date.now() - 3600000 * 1).toISOString(),
-            tags: ["newsletter", "startup", "growth"],
-            wordCount: 92,
-            readabilityScore: 71,
-            isBookmarked: false,
-            category: "Marketing"
-          }
-        ];
-        setArticles(defaultArticles);
-        localStorage.setItem("enhance_ai_articles", JSON.stringify(defaultArticles));
-      }
-    }, 0);
-
-    return () => clearTimeout(initTimer);
+      const all = getAllStoredArticles();
+      const userArticles = all.filter(a => a.userId === active.uid);
+      setArticles(userArticles);
+    }
   }, []);
 
-  // Sync articles to localStorage whenever state edits
-  const saveArticlesToLocal = (updatedList: Article[]) => {
-    setArticles(updatedList);
-    localStorage.setItem("enhance_ai_articles", JSON.stringify(updatedList));
+  // Sync articles to localStorage for current active user
+  const saveArticlesToLocal = (updatedUserArticles: Article[]) => {
+    setArticles(updatedUserArticles);
+    if (!currentUser) return;
+    const all = getAllStoredArticles();
+    const otherArticles = all.filter(a => a.userId !== currentUser.uid);
+    saveAllStoredArticles([...updatedUserArticles, ...otherArticles]);
   };
 
   // Toast Helper
@@ -174,48 +180,114 @@ export default function EnhanceAISaaS() {
     setTimeout(() => setToast(null), 4000);
   };
 
-  // Handle Auth submission
+  // Handle Auth submission with proper validation
   const handleAuthSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) {
-      showToast("Please fill in all core credentials.", "warning");
-      return;
+
+    if (authMode === "SIGNUP") {
+      const res = registerUser(displayName, email, password);
+      if (res.error) {
+        showToast(res.error, "warning");
+        return;
+      }
+
+      const newUser = res.user!;
+      const sessionUser: UserSession = {
+        uid: newUser.uid,
+        email: newUser.email,
+        displayName: newUser.displayName
+      };
+      setCurrentUser(sessionUser);
+
+      // Seed starter articles for new user
+      const starterArticles: Article[] = [
+        {
+          id: generateUniqueId("art"),
+          userId: newUser.uid,
+          title: "The Architecture of Clean Writing and Thinking",
+          content: "Writing is not just a tool for sharing information; it is the ultimate engine for structured thinking. In this era of rapid mental noise, maintaining a workspace that is minimal, bright, and distraction-free allows deep concepts to flourish. \n\nGrammarly and Evernote taught us that layout counts—but real-time suggestion speeds up creation twofold. When you type 'how to' or 'in this', a gentle gray suggestion should pull your thoughts forward gracefully without interrupting your creative flow. Focus is the only leverage that copywriters have left.",
+          status: "published",
+          createdAt: new Date(Date.now() - 3600000 * 24 * 3).toISOString(),
+          updatedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
+          tags: ["minimalism", "writing", "focus"],
+          wordCount: 112,
+          readabilityScore: 84,
+          isBookmarked: true,
+          category: "Creative Writing"
+        },
+        {
+          id: generateUniqueId("art"),
+          userId: newUser.uid,
+          title: "How to Build an Organic Tech Newsletter from Scratch",
+          content: "The key to building a sustainable audience is not flashy marketing campaigns. The absolute secret lies in consistency and depth. Many creators struggle with starting because staring at a blank canvas induces rapid anxiety.\n\nBy leveraging predictive sentence completion engines, we bypass the cold-start problem. Overcoming writer's block is as simple as letting AI clear the path to your next paragraph. You write the thesis, and Enhanced-AI helps you finish standard transition sentences with a single finger tap.",
+          status: "draft",
+          createdAt: new Date(Date.now() - 3600000 * 12).toISOString(),
+          updatedAt: new Date(Date.now() - 3600000 * 1).toISOString(),
+          tags: ["newsletter", "startup", "growth"],
+          wordCount: 92,
+          readabilityScore: 71,
+          isBookmarked: false,
+          category: "Marketing"
+        }
+      ];
+
+      const all = getAllStoredArticles();
+      const updatedAll = [...starterArticles, ...all];
+      saveAllStoredArticles(updatedAll);
+      setArticles(starterArticles);
+
+      showToast(`Welcome to Enhanced-AI, ${sessionUser.displayName}!`, "success");
+      setCurrentView("DASHBOARD");
+      setEmail("");
+      setPassword("");
+      setDisplayName("");
+    } else {
+      const res = authenticateUser(email, password);
+      if (res.error) {
+        showToast(res.error, "warning");
+        return;
+      }
+
+      const user = res.user!;
+      const sessionUser: UserSession = {
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName
+      };
+      setCurrentUser(sessionUser);
+
+      const all = getAllStoredArticles();
+      const userArticles = all.filter(a => a.userId === user.uid);
+      setArticles(userArticles);
+
+      showToast(`Welcome back, ${sessionUser.displayName}!`, "success");
+      setCurrentView("DASHBOARD");
+      setEmail("");
+      setPassword("");
     }
-
-    if (authMode === "SIGNUP" && !displayName) {
-      showToast("Please provide a name.", "warning");
-      return;
-    }
-
-    const sessionUser: UserSession = {
-      uid: generateUniqueId("usr"),
-      email: email,
-      displayName: authMode === "SIGNUP" ? displayName : email.split("@")[0]
-    };
-
-    localStorage.setItem("enhance_ai_user", JSON.stringify(sessionUser));
-    setCurrentUser(sessionUser);
-    showToast(`Welcome back, ${sessionUser.displayName}!`, "success");
-    setCurrentView("DASHBOARD");
-
-    // Clear forms
-    setEmail("");
-    setPassword("");
-    setDisplayName("");
   };
 
   // Handle Logout
   const handleLogout = () => {
-    localStorage.removeItem("enhance_ai_user");
+    clearActiveSession();
     setCurrentUser(null);
+    setArticles([]);
+    setSelectedArticle(null);
     setCurrentView("LANDING");
-    showToast("Signed out successfully from Enhance AI.", "info");
+    showToast("Signed out successfully from Enhanced-AI.", "info");
   };
 
   // Create article action
   const handleCreateArticle = () => {
+    if (!currentUser) {
+      setAuthMode("LOGIN");
+      setCurrentView("AUTH");
+      return;
+    }
+
     const newArticle: Article = {
       id: generateUniqueId("art"),
+      userId: currentUser.uid,
       title: "Untitled Draft Book",
       content: "Type some initial thoughts here to activate the autocomplete. Press Tab when you see the orange hint to complete the sentence automatically...",
       status: "draft",
@@ -340,6 +412,7 @@ export default function EnhanceAISaaS() {
   // Textarea input value tracker: handles debounce requests for sentence completion
   const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
+    const caret = e.target.selectionStart;
     setEditorContent(val);
 
     // Cancel existing timeout
@@ -352,13 +425,19 @@ export default function EnhanceAISaaS() {
       return;
     }
 
-    // Capture the last 150 characters to form contextual autocomplete prompt
-    const snippet = val.length > 350 ? val.substring(val.length - 350) : val;
+    // Capture text up to cursor position (up to 350 chars)
+    const textBeforeCaret = val.slice(0, caret);
+    const snippet = textBeforeCaret.length > 350 ? textBeforeCaret.substring(textBeforeCaret.length - 350) : textBeforeCaret;
 
-    // Trigger prediction after typing stops for 800ms
+    if (!snippet.trim()) {
+      setGhostSuggestion("");
+      return;
+    }
+
+    // Trigger prediction after typing stops for 750ms
     autocompleteTimeoutRef.current = setTimeout(() => {
       fetchAutocompleteSuggestion(snippet);
-    }, 850);
+    }, 750);
   };
 
   // Trigger manual API call or call local mock if key not resolved
@@ -384,7 +463,7 @@ export default function EnhanceAISaaS() {
     }
   };
 
-  // Key Down Events: Listen for 'Tab' or 'Right Arrow' key to accept the inline ghost option
+  // Key Down Events: Listen for 'Tab' key to accept the inline ghost option
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Tab") {
       if (ghostSuggestion) {
@@ -394,21 +473,25 @@ export default function EnhanceAISaaS() {
     }
   };
 
-  // Accept/Commit the ghost-suggestion into the main text content
+  // Accept/Commit the ghost-suggestion into the editor at cursor position
   const acceptSuggestion = () => {
     if (!ghostSuggestion) return;
-    const caretPos = textEditorRef.current?.selectionStart || editorContent.length;
-    const updated = editorContent + ghostSuggestion;
+    const textarea = textEditorRef.current;
+    const caretPos = textarea?.selectionStart ?? editorContent.length;
+    const before = editorContent.slice(0, caretPos);
+    const after = editorContent.slice(caretPos);
+    const updated = before + ghostSuggestion + after;
     setEditorContent(updated);
     setGhostSuggestion("");
     showToast("Sentence autocompleted!", "success");
-    // Place cursor back
+
+    const nextCaret = caretPos + ghostSuggestion.length;
     setTimeout(() => {
-      if (textEditorRef.current) {
-        textEditorRef.current.focus();
-        textEditorRef.current.selectionStart = textEditorRef.current.selectionEnd = updated.length;
+      if (textarea) {
+        textarea.focus();
+        textarea.selectionStart = textarea.selectionEnd = nextCaret;
       }
-    }, 50);
+    }, 40);
   };
 
   // AI assistant tools: Headlines, Tone Optimizing, Outline expander
@@ -429,7 +512,7 @@ export default function EnhanceAISaaS() {
       const data = await response.json();
       if (data.result) {
         setAiOutputResult(data.result);
-        showToast("Enhance AI compiled structured generation!", "success");
+        showToast("Enhanced-AI compiled structured generation!", "success");
       } else {
         showToast("No response from assistant engine.", "warning");
       }
@@ -441,6 +524,36 @@ export default function EnhanceAISaaS() {
     }
   };
 
+  // Copy generated AI output to system clipboard
+  const copyAIPositionContent = () => {
+    if (!aiOutputResult) return;
+    navigator.clipboard.writeText(aiOutputResult);
+    setCopiedToClipboard(true);
+    showToast("Copied AI output to clipboard!", "success");
+    setTimeout(() => setCopiedToClipboard(false), 2500);
+  };
+
+  // Insert generated AI output into editor at current cursor position
+  const insertAIAtCursor = () => {
+    if (!aiOutputResult) return;
+    const textarea = textEditorRef.current;
+    const caretPos = textarea?.selectionStart ?? editorContent.length;
+    const before = editorContent.slice(0, caretPos);
+    const after = editorContent.slice(caretPos);
+    const padBefore = before && !before.endsWith("\n") ? "\n\n" : "";
+    const padAfter = after && !after.startsWith("\n") ? "\n\n" : "";
+    const updated = before + padBefore + aiOutputResult + padAfter + after;
+    setEditorContent(updated);
+    showToast("Inserted AI enhancement at cursor position.", "success");
+    setTimeout(() => {
+      if (textarea) {
+        textarea.focus();
+        const nextPos = caretPos + padBefore.length + aiOutputResult.length;
+        textarea.selectionStart = textarea.selectionEnd = nextPos;
+      }
+    }, 40);
+  };
+
   // Replace editor text with the corrected version from AI Output
   const applyAIPositionContent = () => {
     if (!aiOutputResult) return;
@@ -448,6 +561,26 @@ export default function EnhanceAISaaS() {
       setEditorContent(aiOutputResult);
       showToast("Editor canvas updated with enhanced text.", "success");
     }
+  };
+
+  // Export current article as Markdown (.md) or Plain Text (.txt)
+  const exportArticle = (format: "md" | "txt") => {
+    const safeTitle = (editorTitle || "untitled-article").replace(/[^a-z0-9_-]/gi, "_");
+    const payload = format === "md" 
+      ? `# ${editorTitle || "Untitled"}\n\n${editorContent}`
+      : `${editorTitle || "Untitled"}\n\n${editorContent}`;
+    
+    const blob = new Blob([payload], { type: format === "md" ? "text/markdown;charset=utf-8" : "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${safeTitle}.${format}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    setShowExportMenu(false);
+    showToast(`Article exported as .${format}!`, "success");
   };
 
   // Handle Tags creation
@@ -511,6 +644,112 @@ export default function EnhanceAISaaS() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorTitle, editorContent, editorCategory, editorTags, currentView, selectedArticle]);
 
+  // Sandbox Autocomplete handler for Hero Preview
+  const handleSandboxContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    const caret = e.target.selectionStart;
+    setSandboxContent(val);
+
+    if (sandboxTimeoutRef.current) {
+      clearTimeout(sandboxTimeoutRef.current);
+    }
+
+    if (!val.trim()) {
+      setSandboxSuggestion("");
+      return;
+    }
+
+    const textBeforeCaret = val.slice(0, caret);
+    const snippet = textBeforeCaret.length > 300 ? textBeforeCaret.substring(textBeforeCaret.length - 300) : textBeforeCaret;
+
+    if (!snippet.trim()) {
+      setSandboxSuggestion("");
+      return;
+    }
+
+    sandboxTimeoutRef.current = setTimeout(async () => {
+      setIsSandboxSuggesting(true);
+      try {
+        const response = await fetch("/api/autocomplete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: snippet, title: sandboxTitle })
+        });
+        const data = await response.json();
+        if (data.suggestion) {
+          setSandboxSuggestion(data.suggestion);
+        } else {
+          setSandboxSuggestion("");
+        }
+      } catch (err) {
+        console.error("Sandbox autocomplete error:", err);
+        setSandboxSuggestion("");
+      } finally {
+        setIsSandboxSuggesting(false);
+      }
+    }, 700);
+  };
+
+  const handleSandboxKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Tab" && sandboxSuggestion) {
+      e.preventDefault();
+      acceptSandboxSuggestion();
+    }
+  };
+
+  const acceptSandboxSuggestion = () => {
+    if (!sandboxSuggestion) return;
+    const area = sandboxTextareaRef.current;
+    const pos = area?.selectionStart ?? sandboxContent.length;
+    const before = sandboxContent.slice(0, pos);
+    const after = sandboxContent.slice(pos);
+    const updated = before + sandboxSuggestion + after;
+    setSandboxContent(updated);
+    setSandboxSuggestion("");
+    showToast("Sentence autocompleted with Gemini!", "success");
+
+    const nextCaret = pos + sandboxSuggestion.length;
+    setTimeout(() => {
+      if (area) {
+        area.focus();
+        area.selectionStart = area.selectionEnd = nextCaret;
+      }
+    }, 40);
+  };
+
+  const handleSandboxEnhance = async (action: "improve-tone" | "headlines" | "outline") => {
+    if (!sandboxContent.trim() && !sandboxTitle.trim()) {
+      showToast("Please type something in the preview editor to enhance.", "warning");
+      return;
+    }
+    setIsSandboxEnhancing(true);
+    setSandboxAiOutput("");
+    try {
+      const response = await fetch("/api/enhance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          text: sandboxContent,
+          title: sandboxTitle,
+          tone: "Clear & Professional"
+        })
+      });
+      const data = await response.json();
+      if (data.result) {
+        setSandboxAiOutput(data.result);
+        showToast("Gemini 2.5 Flash enhanced your preview text!", "success");
+      } else {
+        showToast("No response from AI engine.", "warning");
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Could not enhance text right now.", "warning");
+    } finally {
+      setIsSandboxEnhancing(false);
+    }
+  };
+
   return (
     <div id="app-root" className="min-h-screen bg-[#FDFDFD] text-slate-800 font-sans tracking-tight flex flex-col selection:bg-orange-100 selection:text-orange-950">
       
@@ -539,7 +778,10 @@ export default function EnhanceAISaaS() {
 
       {/* HEADER BAR */}
       <header id="main-nav-bar" className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-100 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3 cursor-pointer" onClick={() => setCurrentView("LANDING")}>
+        <div className="flex items-center gap-3 cursor-pointer" onClick={() => {
+          if (currentView === "EDITOR") saveCurrentArticle();
+          setCurrentView("LANDING");
+        }}>
           {/* Custom logo interlocking block using green blue and orange */}
           <div className="relative w-8 h-8 flex items-center justify-center">
             <div className="absolute top-0 left-0 w-5.5 h-5.5 rounded-lg border-2 border-[#2563eb] rotate-6 opacity-85" />
@@ -547,8 +789,8 @@ export default function EnhanceAISaaS() {
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4.5 h-4.5 rounded bg-[#f97316]" />
           </div>
           <div>
-            <h1 className="text-xl font-semibold tracking-tight text-slate-900 flex items-center gap-1">
-              Enhance <span className="text-orange-500 font-bold">AI</span>
+            <h1 className="text-xl font-semibold tracking-tight text-slate-900 flex items-center gap-0.5">
+              Enhanced-<span className="text-orange-500 font-bold">AI</span>
             </h1>
             <p className="text-[10px] uppercase tracking-wider text-slate-400 font-medium">Blogging Catalyst</p>
           </div>
@@ -559,7 +801,10 @@ export default function EnhanceAISaaS() {
           {currentUser ? (
             <div className="flex items-center gap-4">
               <span 
-                onClick={() => setCurrentView("DASHBOARD")}
+                onClick={() => {
+                  if (currentView === "EDITOR") saveCurrentArticle();
+                  setCurrentView("DASHBOARD");
+                }}
                 className={`text-sm cursor-pointer font-medium transition-colors ${currentView === "DASHBOARD" ? "text-blue-600 font-semibold" : "text-slate-600 hover:text-slate-950"}`}
               >
                 Dashboard
@@ -629,7 +874,7 @@ export default function EnhanceAISaaS() {
                 transition={{ duration: 0.6, delay: 0.2 }}
                 className="text-lg text-slate-600 max-w-2xl mt-6 leading-relaxed"
               >
-                Eliminate writer&apos;s block forever. Enhance AI integrates inline, smart ghost-text suggestions that learn the tone and rhythm of your sentences. Inspired by Grammarly and OneNote—but powered by custom intelligent completions.
+                Eliminate writer&apos;s block forever. Enhanced-AI integrates inline, smart ghost-text suggestions that learn the tone and rhythm of your sentences. Inspired by Grammarly and OneNote—but powered by custom intelligent completions.
               </motion.p>
 
               <motion.div 
@@ -664,15 +909,44 @@ export default function EnhanceAISaaS() {
             {/* LIVE EXPERIENTIAL PREVIEW SANDBOX */}
             <section id="interactive-sandbox" className="py-12 bg-slate-50 border-y border-slate-100 flex justify-center px-6">
               <div className="w-full max-w-4xl bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
-                <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                <div className="bg-slate-50 px-6 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-red-400" />
                     <span className="w-3 h-3 rounded-full bg-amber-400" />
                     <span className="w-3 h-3 rounded-full bg-emerald-400" />
-                    <span className="text-xs text-slate-400 font-mono ml-2">Interactive Preview Editor</span>
+                    <span className="text-xs text-slate-500 font-mono ml-2 font-semibold">Interactive Preview Editor</span>
+                    <span className="text-[10px] bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full font-bold border border-blue-100">Live Gemini 2.5 Flash</span>
                   </div>
-                  <div className="flex items-center gap-4 text-xs text-slate-500 font-medium">
-                    <span className="flex items-center gap-1.5"><Zap className="w-3.5 h-3.5 text-orange-400" /> Sentence Predictor Active</span>
+
+                  {/* AI Quick Actions in Sandbox */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleSandboxEnhance("improve-tone")}
+                      disabled={isSandboxEnhancing}
+                      className="px-2.5 py-1 bg-white hover:bg-blue-50 text-blue-700 text-xs font-semibold rounded-lg border border-slate-200 hover:border-blue-200 transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                      title="Rewrite tone using Gemini"
+                    >
+                      <Sparkles className="w-3 h-3 text-blue-600" />
+                      Improve Tone
+                    </button>
+                    <button
+                      onClick={() => handleSandboxEnhance("headlines")}
+                      disabled={isSandboxEnhancing}
+                      className="px-2.5 py-1 bg-white hover:bg-orange-50 text-orange-700 text-xs font-semibold rounded-lg border border-slate-200 hover:border-orange-200 transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                      title="Generate 5 click-worthy headlines"
+                    >
+                      <Award className="w-3 h-3 text-orange-500" />
+                      Headlines
+                    </button>
+                    <button
+                      onClick={() => handleSandboxEnhance("outline")}
+                      disabled={isSandboxEnhancing}
+                      className="px-2.5 py-1 bg-white hover:bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-lg border border-slate-200 hover:border-emerald-200 transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                      title="Generate structured outline"
+                    >
+                      <BookOpen className="w-3 h-3 text-emerald-600" />
+                      Outline
+                    </button>
                   </div>
                 </div>
 
@@ -681,63 +955,102 @@ export default function EnhanceAISaaS() {
                     <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Sandbox Article title</label>
                     <input 
                       type="text" 
-                      defaultValue="Growing an Organic Following" 
-                      disabled 
+                      value={sandboxTitle}
+                      onChange={(e) => setSandboxTitle(e.target.value)}
+                      placeholder="Enter a topic or title..."
                       className="text-xl font-semibold text-slate-900 w-full bg-transparent focus:outline-hidden"
                     />
                   </div>
 
-                  <div className="relative min-h-[160px]">
+                  <div className="relative min-h-[170px]">
                     <textarea
-                      placeholder="Try typing here: e.g., 'how to' or 'in this' and wait a second to see suggestions..."
-                      className="w-full h-full min-h-[150px] text-slate-700 resize-none font-sans text-base leading-relaxed bg-transparent focus:outline-hidden border-none"
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        if (autocompleteTimeoutRef.current) clearTimeout(autocompleteTimeoutRef.current);
-                        
-                        // Look up simple text match for simulated autocomplete
-                        const lower = val.trim().toLowerCase();
-                        if (lower.endsWith("how to")) {
-                          setGhostSuggestion(" write high converting paragraphs.");
-                        } else if (lower.endsWith("in this")) {
-                          setGhostSuggestion(" article, we reveal clean content styling secrets.");
-                        } else if (lower.endsWith("artificial intelligence")) {
-                          setGhostSuggestion(" is transforming the blogosphere.");
-                        } else if (val === "") {
-                          setGhostSuggestion("");
-                        } else {
-                          // generic fallback suggestion
-                          setGhostSuggestion(" with simple sentences.");
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Tab" && ghostSuggestion) {
-                          e.preventDefault();
-                          // trigger simulated accept
-                          const area = e.currentTarget;
-                          const currentText = area.value;
-                          area.value = currentText + ghostSuggestion;
-                          setGhostSuggestion("");
-                          showToast("Autocompleted suggestion!", "success");
-                        }
-                      }}
+                      ref={sandboxTextareaRef}
+                      value={sandboxContent}
+                      onChange={handleSandboxContentChange}
+                      onKeyDown={handleSandboxKeyDown}
+                      placeholder="Type your blog thoughts here: e.g., 'i dont know how to write high converting paragraphs. but' and pause for a moment to watch real Gemini completions appear! Hit Tab to accept."
+                      className="w-full h-full min-h-[160px] text-slate-700 resize-none font-sans text-base leading-relaxed bg-transparent focus:outline-hidden border-none"
                     />
+
+                    {/* Live Suggestion spinner */}
+                    {isSandboxSuggesting && (
+                      <div className="absolute bottom-3 right-3 flex items-center gap-1.5 px-3 py-1 rounded-lg bg-orange-50 border border-orange-200 text-xs text-orange-900 font-semibold shadow-xs">
+                        <RefreshCw className="w-3 h-3 text-orange-500 animate-spin" />
+                        <span>Consulting Gemini...</span>
+                      </div>
+                    )}
                     
-                    {/* Inline absolute suggestion display */}
-                    {ghostSuggestion && (
-                      <div className="absolute bottom-2 left-2 right-2 bg-orange-50/95 border border-orange-200 rounded-lg p-3 flex items-center justify-between text-xs text-orange-950 font-medium shadow-xs">
+                    {/* Inline real Gemini suggestion display */}
+                    {sandboxSuggestion && (
+                      <div className="absolute bottom-2 left-2 right-2 bg-orange-50/95 border border-orange-200 rounded-xl p-3 flex items-center justify-between text-xs text-orange-950 font-medium shadow-md z-10">
                         <div className="flex items-center gap-2">
-                          <Sparkles className="w-3.5 h-3.5 text-orange-500 animate-pulse" />
-                          <span>AI Complete suggestion: <span className="font-semibold text-slate-900">{ghostSuggestion}</span></span>
+                          <Sparkles className="w-4 h-4 text-orange-500 shrink-0" />
+                          <span>Gemini autocomplete: <span className="font-bold text-slate-950 bg-white/80 px-2 py-0.5 rounded border border-orange-100">&quot;{sandboxSuggestion}&quot;</span></span>
                         </div>
-                        <span className="px-2 py-0.5 rounded bg-orange-200 text-orange-900 font-mono text-[10px]">Press TAB ⇥</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={acceptSandboxSuggestion}
+                            className="px-2.5 py-1 bg-orange-500 hover:bg-orange-600 text-white rounded-md text-[10px] uppercase font-bold cursor-pointer"
+                          >
+                            Press Tab ⇥
+                          </button>
+                          <button
+                            onClick={() => setSandboxSuggestion("")}
+                            className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
+
+                  {/* Sandbox AI Enhance Output Drawer */}
+                  {sandboxAiOutput && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="mt-4 p-4 rounded-xl border border-blue-200 bg-blue-50/60 text-xs space-y-3"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-blue-900 flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                          Gemini 2.5 Flash Result
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              setSandboxContent((prev) => (prev ? prev + "\n\n" + sandboxAiOutput : sandboxAiOutput));
+                              showToast("Inserted AI result into sandbox editor!", "success");
+                            }}
+                            className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold cursor-pointer"
+                          >
+                            Insert into Sandbox
+                          </button>
+                          <button
+                            onClick={() => setSandboxAiOutput("")}
+                            className="p-1 text-slate-400 hover:text-slate-600"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <pre className="whitespace-pre-wrap font-sans text-slate-700 max-h-[140px] overflow-y-auto bg-white p-3 rounded-lg border border-blue-100 leading-relaxed">
+                        {sandboxAiOutput}
+                      </pre>
+                    </motion.div>
+                  )}
+
+                  {isSandboxEnhancing && (
+                    <div className="mt-3 flex items-center justify-center gap-2 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600">
+                      <RefreshCw className="w-4 h-4 text-blue-500 animate-spin" />
+                      Generating with Google Gemini...
+                    </div>
+                  )}
                   
                   <p className="text-xs text-slate-400 mt-4 leading-normal flex items-center gap-1.5 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
                     <Info className="w-3.5 h-3.5 text-blue-500 flex-shrink-0" />
-                    Our neural autocomplete analyzes the previous paragraph, drafting natural endings. Sign up to customize themes, save draft logs, and leverage the real Google Gemini models.
+                    Powered by real Google Gemini 2.5 Flash neural models. Type above to test live autocomplete, or click Improve Tone / Headlines to see instant AI assistance in action.
                   </p>
                 </div>
               </div>
@@ -822,7 +1135,7 @@ export default function EnhanceAISaaS() {
                   <BookOpen className="w-6 h-6" />
                 </div>
                 <h2 className="text-2xl font-bold text-slate-950">
-                  {authMode === "LOGIN" ? "Welcome back to Enhance AI" : "Join Enhance AI Today"}
+                  {authMode === "LOGIN" ? "Welcome back to Enhanced-AI" : "Join Enhanced-AI Today"}
                 </h2>
                 <p className="text-slate-500 text-sm mt-1">
                   {authMode === "LOGIN" ? "Your creative cloud writer is waiting." : "Create premium blog posts at light-speed."}
@@ -1144,7 +1457,7 @@ export default function EnhanceAISaaS() {
                 <div className="flex items-center gap-2">
                   <span className={`w-2.5 h-2.5 rounded-full ${isEditorSaving ? "bg-amber-400 animate-pulse" : "bg-emerald-500"}`} />
                   <span className="text-[11px] font-mono text-slate-400">
-                    {isEditorSaving ? "Autosaving to Enhance AI cloud..." : "Synced & Saved"}
+                    {isEditorSaving ? "Autosaving to Enhanced-AI cloud..." : "Synced & Saved"}
                   </span>
                   
                   <button
@@ -1153,6 +1466,34 @@ export default function EnhanceAISaaS() {
                   >
                     Force Save
                   </button>
+
+                  {/* Export Dropdown */}
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowExportMenu(!showExportMenu)}
+                      className="text-xs font-bold text-slate-700 hover:text-emerald-700 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+                      title="Export blog article"
+                    >
+                      <Download className="w-3.5 h-3.5 text-emerald-600" />
+                      Export
+                    </button>
+                    {showExportMenu && (
+                      <div className="absolute right-0 top-full mt-1.5 w-36 bg-white border border-slate-200 rounded-xl shadow-lg z-50 py-1 flex flex-col text-xs font-medium">
+                        <button
+                          onClick={() => exportArticle("md")}
+                          className="px-3 py-2 text-left hover:bg-slate-50 text-slate-700 flex items-center justify-between cursor-pointer"
+                        >
+                          Markdown (.md)
+                        </button>
+                        <button
+                          onClick={() => exportArticle("txt")}
+                          className="px-3 py-2 text-left hover:bg-slate-50 text-slate-700 flex items-center justify-between cursor-pointer"
+                        >
+                          Plain Text (.txt)
+                        </button>
+                      </div>
+                    )}
+                  </div>
 
                   <button
                     onClick={() => selectedArticle && togglePublishStatus(selectedArticle)}
@@ -1333,7 +1674,7 @@ export default function EnhanceAISaaS() {
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Sparkles className="w-4 h-4 text-orange-500" />
-                        <h3 className="font-bold text-sm text-slate-900 uppercase tracking-wider">Enhance AI Copilot</h3>
+                        <h3 className="font-bold text-sm text-slate-900 uppercase tracking-wider">Enhanced-AI Copilot</h3>
                       </div>
                       <button 
                         onClick={() => setAiSidebarOpen(false)}
@@ -1428,11 +1769,26 @@ export default function EnhanceAISaaS() {
                       <pre className="text-xs text-slate-700 font-sans whitespace-pre-wrap leading-relaxed max-h-[160px] overflow-y-auto bg-slate-50 p-2.5 rounded border border-slate-100">
                         {aiOutputResult}
                       </pre>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={copyAIPositionContent}
+                          className="py-1.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer"
+                        >
+                          {copiedToClipboard ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3 text-slate-600" />}
+                          {copiedToClipboard ? "Copied!" : "Copy"}
+                        </button>
+                        <button
+                          onClick={insertAIAtCursor}
+                          className="py-1.5 px-2 bg-orange-500 hover:bg-orange-600 text-white text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer"
+                        >
+                          Insert at Cursor
+                        </button>
+                      </div>
                       <button
                         onClick={applyAIPositionContent}
-                        className="w-full py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold rounded-lg transition-all"
+                        className="w-full py-1 text-slate-400 hover:text-slate-600 text-[10px] font-medium transition-all text-center underline cursor-pointer"
                       >
-                        Apply / Overwrite to Paper
+                        Replace entire article with this
                       </button>
                     </div>
                   )}
@@ -1461,7 +1817,7 @@ export default function EnhanceAISaaS() {
       {/* FOOTER */}
       <footer id="app-footer" className="bg-white border-t border-slate-100 py-6 px-6 text-center text-xs text-slate-400">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 font-mono">
-          <p>© 2026 Enhance AI Inc. Minimalistic structured blog catalogs with real-time autocompletion.</p>
+          <p>© 2026 Enhanced-AI Inc. Minimalistic structured blog catalogs with real-time autocompletion.</p>
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />

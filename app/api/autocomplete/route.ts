@@ -71,10 +71,10 @@ export async function POST(req: NextRequest) {
     const ai = new GoogleGenAI({ apiKey: apiKey });
     
     const contextPrompt = `
-You are an expert writing assistant for the SaaS "Enhance AI". 
+You are an expert writing assistant for the SaaS "Enhanced-AI". 
 The user is drafting a blog article titled "${title || "Untitled Article"}".
-Below is the current content of their draft. Complete the last sentence naturally with exactly 3 to 6 words.
-Do NOT repeat any text the user has already written. Return ONLY the predicted completion. Keep it clean and grammatically aligned.
+Below is the current content of their draft up to their cursor position. Complete the sentence naturally with exactly 3 to 6 words.
+Do NOT repeat any text the user has already written. Return ONLY the predicted completion without quotes. Keep it clean and grammatically aligned.
 
 Current content text:
 """
@@ -92,12 +92,21 @@ Predicted completion:`;
         }
       ],
       config: {
-        maxOutputTokens: 20,
+        thinkingConfig: { thinkingBudget: 0 },
+        maxOutputTokens: 60,
         temperature: 0.3,
       }
     });
 
-    const suggestion = response.text?.trim() || "";
+    let suggestion = response.text?.trim() || "";
+    // Remove wrapping quotes if any
+    suggestion = suggestion.replace(/^["'`]+|["'`]+$/g, "");
+    
+    // Ensure proper leading whitespace if preceding text ends with non-whitespace
+    if (suggestion && text.length > 0 && !/\s$/.test(text) && !/^\s/.test(suggestion)) {
+      suggestion = " " + suggestion;
+    }
+
     return NextResponse.json({ suggestion });
   } catch (err: any) {
     console.error("Autocomplete API Error (falling back to Mock):", err);
